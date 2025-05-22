@@ -1,0 +1,286 @@
+<!DOCTYPE html><html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>FPS Mobile com Three.js</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    canvas { display: block; }
+    #crosshair {
+      position: fixed; top: 50%; left: 50%; width: 10px; height: 10px;
+      background: red; transform: translate(-50%, -50%);
+      border-radius: 50%; z-index: 10;
+    }
+    #joystick {
+      position: fixed; bottom: 40px; left: 40px; width: 100px; height: 100px;
+      background: rgba(255,255,255,0.1); border: 2px solid #aaa;
+      border-radius: 50%; z-index: 10; touch-action: none;
+    }
+    #stick {
+      width: 40px; height: 40px; background: rgba(255,0,0,0.5);
+      border-radius: 50%; position: absolute; top: 30px; left: 30px;
+      touch-action: none;
+    }
+    #buttons {
+      position: fixed; bottom: 40px; right: 40px;
+      display: flex; flex-direction: column; gap: 15px; z-index: 10;
+    }
+    .btn {
+      width: 60px; height: 60px; background: rgba(255,255,255,0.2);
+      border: 2px solid #fff; border-radius: 50%; color: #fff;
+      font-weight: bold; font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+      user-select: none; touch-action: none;
+    }
+    #hud {
+      position: fixed; top: 10px; left: 10px;
+      color: white; font-size: 14px; background: rgba(0,0,0,0.5);
+      padding: 5px 10px; border-radius: 10px; z-index: 10;
+    }
+    #startScreen {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: black; color: white; display: flex;
+      flex-direction: column; align-items: center; justify-content: center;
+      font-size: 24px; z-index: 20;
+    }
+    #startBtn {
+      margin-top: 20px; padding: 10px 20px;
+      background: white; color: black; font-weight: bold;
+      border: none; border-radius: 10px; font-size: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="startScreen">
+    <div>FPS Mobile Battle</div>
+    <button id="startBtn">Jogar</button>
+  </div>
+  <div id="crosshair"></div>
+  <div id="joystick"><div id="stick"></div></div>
+  <div id="buttons">
+    <div class="btn" id="jumpBtn">Jump</div>
+    <div class="btn" id="shootBtn">Shoot</div>
+    <div class="btn" id="aimBtn">Aim</div>
+  </div>
+  <div id="hud">Vida: 100<br>Arma: Fuzil</div>  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
+    import { PointerLockControls } from 'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/controls/PointerLockControls.js';
+
+    let camera, scene, renderer, controls;
+    let velocity = new THREE.Vector3();
+    let direction = new THREE.Vector3();
+    let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+    let canJump = false;
+    let isAiming = false;
+    let rifle;
+    let bots = [];
+
+    let raycaster = new THREE.Raycaster();
+    const objects = [];
+
+    let fallingFromSky = true;
+
+    document.getElementById('startBtn').addEventListener('click', () => {
+      document.getElementById('startScreen').style.display = 'none';
+      controls.lock();
+    });
+
+    init();
+    animate();
+
+    function init() {
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x333333);
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 1000);
+
+      const light = new THREE.DirectionalLight(0xffffff, 1);
+      light.position.set(1, 10, 5).normalize();
+      scene.add(light);
+
+      const floor = new THREE.Mesh(
+        new THREE.PlaneGeometry(200, 200),
+        new THREE.MeshStandardMaterial({ color: 0x222222 })
+      );
+      floor.rotation.x = -Math.PI / 2;
+      scene.add(floor);
+      objects.push(floor);
+
+      // Muro
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(10, 10, 1),
+        new THREE.MeshStandardMaterial({ color: 0x8844ff })
+      );
+      wall.position.set(0, 5, -20);
+      scene.add(wall);
+      objects.push(wall);
+
+      // Bots NPCs
+      for (let i = 0; i < 3; i++) {
+        const npc = new THREE.Mesh(
+          new THREE.CapsuleGeometry(0.5, 1.5, 4, 8),
+          new THREE.MeshStandardMaterial({ color: 0xff9900 })
+        );
+        npc.position.set(Math.random() * 20 - 10, 2, Math.random() * 20 - 10);
+        scene.add(npc);
+        npc.userData = { direction: new THREE.Vector3(Math.random()-0.5, 0, Math.random()-0.5).normalize() };
+        bots.push(npc);
+        objects.push(npc);
+      }
+
+      // Arma (fuzil)
+      rifle = new THREE.Mesh(
+        new THREE.BoxGeometry(0.1, 0.1, 0.6),
+        new THREE.MeshBasicMaterial({ color: 0x111111 })
+      );
+      rifle.position.set(0.3, -0.3, -0.6);
+      camera.add(rifle);
+      scene.add(camera);
+
+      renderer = new THREE.WebGLRenderer();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      controls = new PointerLockControls(camera, document.body);
+
+      document.addEventListener('keydown', e => {
+        if (e.code === 'KeyW') moveForward = true;
+        if (e.code === 'KeyS') moveBackward = true;
+        if (e.code === 'KeyA') moveLeft = true;
+        if (e.code === 'KeyD') moveRight = true;
+        if (e.code === 'Space' && canJump) {
+          velocity.y += 10;
+          canJump = false;
+        }
+      });
+
+      document.addEventListener('keyup', e => {
+        if (e.code === 'KeyW') moveForward = false;
+        if (e.code === 'KeyS') moveBackward = false;
+        if (e.code === 'KeyA') moveLeft = false;
+        if (e.code === 'KeyD') moveRight = false;
+      });
+
+      camera.position.set(0, 50, 0); // Começa no ar
+    }
+
+    function shoot() {
+      const bullet = new THREE.Mesh(
+        new THREE.SphereGeometry(0.1, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xff0000 })
+      );
+      bullet.position.copy(camera.position);
+      scene.add(bullet);
+
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir);
+
+      const speed = 2;
+      const interval = setInterval(() => {
+        bullet.position.add(dir.clone().multiplyScalar(speed));
+        if (bullet.position.length() > 100) {
+          clearInterval(interval);
+          scene.remove(bullet);
+        }
+      }, 16);
+    }
+
+    // Joystick e botões
+    let stick = document.getElementById('stick');
+    let joystick = document.getElementById('joystick');
+    let dragging = false;
+    let joyDir = { x: 0, y: 0 };
+
+    joystick.addEventListener('touchstart', () => dragging = true);
+    joystick.addEventListener('touchmove', e => {
+      if (!dragging) return;
+      let touch = e.touches[0];
+      let rect = joystick.getBoundingClientRect();
+      let dx = touch.clientX - (rect.left + 50);
+      let dy = touch.clientY - (rect.top + 50);
+      let dist = Math.min(Math.sqrt(dx * dx + dy * dy), 40);
+      let angle = Math.atan2(dy, dx);
+      let x = Math.cos(angle) * dist;
+      let y = Math.sin(angle) * dist;
+      stick.style.left = `${30 + x}px`;
+      stick.style.top = `${30 + y}px`;
+      joyDir.x = x / 40;
+      joyDir.y = y / 40;
+      e.preventDefault();
+    });
+    joystick.addEventListener('touchend', () => {
+      dragging = false;
+      stick.style.left = '30px';
+      stick.style.top = '30px';
+      joyDir = { x: 0, y: 0 };
+    });
+
+    document.getElementById('jumpBtn').addEventListener('touchstart', () => {
+      if (canJump) {
+        velocity.y += 10;
+        canJump = false;
+      }
+    });
+    document.getElementById('shootBtn').addEventListener('touchstart', shoot);
+    document.getElementById('aimBtn').addEventListener('touchstart', () => {
+      isAiming = !isAiming;
+      camera.fov = isAiming ? 40 : 75;
+      camera.updateProjectionMatrix();
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = 0.1;
+
+      if (fallingFromSky) {
+        camera.position.y -= 1;
+        if (camera.position.y <= 2) {
+          camera.position.y = 2;
+          fallingFromSky = false;
+          canJump = true;
+        }
+      }
+
+      if (controls.isLocked || dragging) {
+        velocity.x -= velocity.x * 10.0 * delta;
+        velocity.z -= velocity.z * 10.0 * delta;
+        velocity.y -= 9.8 * delta;
+
+        direction.z = (moveForward ? 1 : 0) - (moveBackward ? 1 : 0);
+        direction.x = (moveRight ? 1 : 0) - (moveLeft ? 1 : 0);
+
+        if (dragging) {
+          direction.x = joyDir.x;
+          direction.z = -joyDir.y;
+        }
+
+        direction.normalize();
+
+        if (direction.length() > 0) {
+          velocity.z -= direction.z * 400.0 * delta;
+          velocity.x -= direction.x * 400.0 * delta;
+        }
+
+        controls.moveRight(-velocity.x * delta);
+        controls.moveForward(-velocity.z * delta);
+        camera.position.y += velocity.y * delta;
+
+        if (camera.position.y < 2) {
+          velocity.y = 0;
+          camera.position.y = 2;
+          canJump = true;
+        }
+      }
+
+      // Movimento dos bots (IA básica)
+      bots.forEach(bot => {
+        const dir = bot.userData.direction.clone();
+        bot.position.add(dir.multiplyScalar(0.05));
+        if (Math.random() < 0.01) {
+          bot.userData.direction = new THREE.Vector3(Math.random()-0.5, 0, Math.random()-0.5).normalize();
+        }
+      });
+
+      renderer.render(scene, camera);
+    }
+  </script></body>
+</html>
